@@ -1,0 +1,57 @@
+// ทดสอบหน้าจัดการร้านค้าของพ่อค้า และการกันบัญชีอื่นเข้าหน้าคำสั่งซื้อของร้าน
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+(async()=>{
+ const {createStore}=await import('../server/store.js'),{createApp,hashPassword}=await import('../server/app.js');
+ const store=await createStore();
+ await store.addUser({id:'shop-owner',name:'Shop Tester',email:'shop@test.local',passwordHash:hashPassword('test-password-123'),role:'merchant',verification:'approved',balance:0});
+ await store.addCard({id:'owned-card',name:'Own card',category:'Pokémon',set:'TEST',rarity:'SR',condition:'Near Mint',price:10000,image:'/art/fire.svg',sellerId:'shop-owner',sellerName:'Test Shop',createdAt:new Date().toISOString()});
+ const server=createApp(store).listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+ const browser=await chromium.launch({channel:'msedge',headless:true});
+ try{
+  const page=await browser.newPage(),base=`http://127.0.0.1:${server.address().port}`;const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(base);
+  await page.locator('#cards .card').first().waitFor();
+  if(await page.locator('[data-merchant-only]:visible').count())throw Error('Guest sees merchant tools');
+  await page.request.post(base+'/api/auth/register',{data:{name:'Buyer',email:'buyer@shop.local',password:'test-password-123',role:'customer'}});
+  await page.goto(base+'/#/shop');
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelector('#account').textContent.includes('Buyer'));
+  if(page.url().endsWith('#/shop')||await page.locator('#shop-tools').isVisible())throw Error('Buyer entered shop route');
+  if(await page.locator('[data-merchant-only]:visible').count())throw Error('Buyer sees merchant tools');
+  await page.goto(base+'/#/orders/sales');
+  await page.locator('.order-list').waitFor();
+  if(!page.url().endsWith('#/orders/purchases'))throw Error('Buyer entered sales route');
+  if((await page.request.get(base+'/api/orders?scope=sales')).status()!==403)throw Error('Buyer can request merchant orders');
+  await page.request.post(base+'/api/auth/logout');
+  await page.request.post(base+'/api/auth/login',{data:{email:'shop@test.local',password:'test-password-123'}});
+  await page.goto(base);await page.locator('#my-shop').click();
+  await page.locator('[data-shop-edit]').waitFor();
+  if(await page.locator('dialog[open]').count())throw Error('Shop opened intermediary modal');
+  if(await page.locator('#cards .card').count()!==1)throw Error('Shop includes other sellers');
+  await page.locator('[data-shop-edit]').click();await page.locator('[name=name]').fill('Edited in shop');
+  await page.locator('[name=character]').fill('Pikachu, พิคาชู');
+  const formBox=await page.locator('#dialog').boundingBox();
+  if(Math.abs(formBox.y)>1||Math.abs(formBox.height-page.viewportSize().height)>1)throw Error('Listing does not fill viewport: '+JSON.stringify(formBox));
+  await page.screenshot({path:'tmp/listing-full-desktop.png'});
+  await page.setViewportSize({width:390,height:844});
+  if(await page.locator('#dialog').evaluate(el=>el.scrollWidth>el.clientWidth))throw Error('Listing mobile overflow');
+  await page.screenshot({path:'tmp/listing-full-mobile.png'});
+  await page.locator('#listing-form > button.dark').click();
+  await page.waitForFunction(()=>document.querySelector('#cards h3')?.textContent==='Edited in shop');
+  if(!page.url().endsWith('#/shop'))throw Error('Edit left shop');
+  const found=await page.request.get(base+'/api/cards?q='+encodeURIComponent('พิคาชู')).then(r=>r.json());
+  if(found.length!==1||found[0].character!=='Pikachu, พิคาชู')throw Error('Character search failed');
+  await page.reload();await page.locator('[data-shop-edit]').waitFor();
+  await page.screenshot({path:'tmp/shop-desktop.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Mobile overflow');
+  await page.screenshot({path:'tmp/shop-mobile.png',fullPage:true});
+  await page.locator('#new-listing').click();await page.locator('#listing-form').waitFor();await page.locator('#close-dialog').click();
+  await page.locator('#shop-orders').click();await page.locator('.order-list').waitFor();await page.locator('#my-shop').click();
+  await page.locator('[data-shop-delete]').click();await page.locator('#confirm-delete').click();await page.locator('#cards .empty').waitFor();
+  if(!page.url().endsWith('#/shop'))throw Error('Delete left shop');
+  await page.locator('#market').click();await page.waitForFunction(()=>!document.body.classList.contains('shop-open')&&document.querySelectorAll('#cards .card').length===8);
+  if(errors.length)throw Error(errors.join('\n'));
+  console.log('Passed: shop opens directly, own listings only, edit/save/delete stay in shop, direct URL/reload, listing/order controls and mobile.');
+ }finally{await browser.close();await new Promise(r=>server.close(r));}
+})().catch(e=>{console.error(e);process.exit(1);});

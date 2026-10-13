@@ -1,0 +1,22 @@
+# Dependencies (ติดตั้งใหม่ได้ด้วย npm install)
+node_modules/
+
+# Environment: มี MONGODB_URI และรหัสผ่านแอดมิน ห้าม commit (ใช้ .env.example เป็นแม่แบบ)
+.env
+.env.*
+!.env.example
+
+# Local runtime: npm cache, ไฟล์ชั่วคราว, รูปทดสอบและภาพหน้าจอ
+.local-runtime/
+tmp/
+coverage/
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
